@@ -1,3 +1,4 @@
+mod logging;
 mod model;
 mod service;
 
@@ -9,18 +10,13 @@ use service::mongo::MongoService;
 use service::turso::TursoService;
 use std::env;
 use std::time::Duration;
-use tracing::{debug, error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set up tracing subscriber");
+    logging::init_logging("tagatoni");
 
     info!("Starting Tagatoni Recipe Audit Agent 🏷️");
 
