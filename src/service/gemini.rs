@@ -44,13 +44,128 @@ struct Step {
     content: Option<Value>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct AuditResult {
-    pub calories: i32,
+    pub calories: Option<i32>,
     #[serde(rename = "recipeCuisine")]
-    pub recipe_cuisine: String,
+    pub recipe_cuisine: Option<String>,
     #[serde(rename = "recipeYield")]
-    pub recipe_yield: i32,
+    pub recipe_yield: Option<i32>,
+}
+
+pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
+    let need_calories = recipe.calories.is_none();
+    let need_cuisine = recipe.recipe_cuisine.is_none();
+    let need_yield = recipe.recipe_yield.is_none();
+
+    let mut request_items = Vec::new();
+    let mut item_counter = 1;
+
+    if need_calories {
+        request_items.push(format!(
+            "{}. Calories (an integer representing estimated calories per serving).",
+            item_counter
+        ));
+        item_counter += 1;
+    }
+
+    if need_cuisine {
+        request_items.push(format!(
+            "{}. Recipe cuisine (must be selected from the allowed enum list).",
+            item_counter
+        ));
+        item_counter += 1;
+    }
+
+    if need_yield {
+        request_items.push(format!(
+            "{}. Recipe yield (an integer representing the estimated number of servings, e.g. 4).",
+            item_counter
+        ));
+    }
+
+    let items_text = request_items.join("\n");
+
+    let prompt = format!(
+        "Audit this recipe and estimate the following missing field(s):\n{}\n\nRecipe Details:\nTitle: {}\nDescription: {}\nCategories: {}\nIngredients:\n{}\nSteps:\n{}",
+        items_text,
+        recipe.title,
+        recipe.description,
+        recipe.categories.join(", "),
+        recipe
+            .ingredients
+            .iter()
+            .map(|i| format!("- {}", i))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        recipe
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| format!("{}. {}", idx + 1, s))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    let mut properties = json!({});
+    let mut property_ordering = Vec::new();
+    let mut required = Vec::new();
+
+    if need_calories {
+        properties["calories"] = json!({ "type": "integer" });
+        property_ordering.push("calories");
+        required.push("calories");
+    }
+
+    if need_cuisine {
+        properties["recipeCuisine"] = json!({
+            "type": "string",
+            "enum": [
+                "Spanish",
+                "Catalan",
+                "Italian",
+                "Mexican",
+                "Japanese",
+                "Chinese",
+                "Indian",
+                "French",
+                "American",
+                "Mediterranean",
+                "Middle Eastern",
+                "Greek",
+                "Thai",
+                "Vietnamese",
+                "Moroccan",
+                "Turkish",
+                "Latin American",
+                "Caribbean",
+                "Nordic",
+                "British",
+                "German",
+                "Eastern European",
+                "African",
+                "Asian Fusion",
+                "International"
+            ]
+        });
+        property_ordering.push("recipeCuisine");
+        required.push("recipeCuisine");
+    }
+
+    if need_yield {
+        properties["recipeYield"] = json!({ "type": "integer" });
+        property_ordering.push("recipeYield");
+        required.push("recipeYield");
+    }
+
+    let response_schema = json!({
+        "type": "object",
+        "properties": properties,
+        "propertyOrdering": property_ordering,
+        "required": required
+    });
+
+    (prompt, response_schema)
 }
 
 impl GeminiService {
@@ -62,84 +177,14 @@ impl GeminiService {
         Self { client, api_key }
     }
 
-    /// Calls the Gemini Interactions API to audit a recipe and extract SEO metadata.
+    /// Calls the Gemini Interactions API to audit a recipe and extract missing SEO metadata.
     pub async fn audit_recipe(&self, recipe: &Recipe) -> Result<AuditResult, String> {
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/interactions?key={}",
             self.api_key
         );
 
-        let prompt = format!(
-            "Audit this recipe and estimate:
-1. Calories (an integer representing estimated calories per serving).
-2. Recipe cuisine (must be selected from the allowed enum list).
-3. Recipe yield (an integer representing the estimated number of servings, e.g. 4).
-
-Recipe Details:
-Title: {}
-Description: {}
-Categories: {}
-Ingredients:
-{}
-Steps:
-{}",
-            recipe.title,
-            recipe.description,
-            recipe.categories.join(", "),
-            recipe
-                .ingredients
-                .iter()
-                .map(|i| format!("- {}", i))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            recipe
-                .steps
-                .iter()
-                .enumerate()
-                .map(|(idx, s)| format!("{}. {}", idx + 1, s))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-
-        let response_schema = json!({
-            "type": "object",
-            "properties": {
-                "calories": { "type": "integer" },
-                "recipeCuisine": {
-                    "type": "string",
-                    "enum": [
-                        "Spanish",
-                        "Catalan",
-                        "Italian",
-                        "Mexican",
-                        "Japanese",
-                        "Chinese",
-                        "Indian",
-                        "French",
-                        "American",
-                        "Mediterranean",
-                        "Middle Eastern",
-                        "Greek",
-                        "Thai",
-                        "Vietnamese",
-                        "Moroccan",
-                        "Turkish",
-                        "Latin American",
-                        "Caribbean",
-                        "Nordic",
-                        "British",
-                        "German",
-                        "Eastern European",
-                        "African",
-                        "Asian Fusion",
-                        "International"
-                    ]
-                },
-                "recipeYield": { "type": "integer" }
-            },
-            "propertyOrdering": ["calories", "recipeCuisine", "recipeYield"],
-            "required": ["calories", "recipeCuisine", "recipeYield"]
-        });
+        let (prompt, response_schema) = build_prompt_and_schema(recipe);
 
         let payload = GeminiRequest {
             model: "models/gemini-3.5-flash".to_string(),
@@ -217,6 +262,7 @@ fn extract_text_from_steps(steps: &[Step]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::bson::oid::ObjectId;
     use serde_json::json;
 
     #[test]
@@ -270,8 +316,70 @@ mod tests {
     fn test_audit_result_deserialization() {
         let raw_json = "{\"calories\": 500, \"recipeCuisine\": \"Spanish\", \"recipeYield\": 2}";
         let result: AuditResult = serde_json::from_str(raw_json).unwrap();
-        assert_eq!(result.calories, 500);
-        assert_eq!(result.recipe_cuisine, "Spanish");
-        assert_eq!(result.recipe_yield, 2);
+        assert_eq!(result.calories, Some(500));
+        assert_eq!(result.recipe_cuisine, Some("Spanish".to_string()));
+        assert_eq!(result.recipe_yield, Some(2));
+    }
+
+    #[test]
+    fn test_audit_result_partial_deserialization() {
+        let raw_json = "{\"recipeCuisine\": \"Italian\"}";
+        let result: AuditResult = serde_json::from_str(raw_json).unwrap();
+        assert_eq!(result.calories, None);
+        assert_eq!(result.recipe_cuisine, Some("Italian".to_string()));
+        assert_eq!(result.recipe_yield, None);
+    }
+
+    #[test]
+    fn test_build_prompt_and_schema_single_missing_field() {
+        let recipe = Recipe {
+            id: ObjectId::new(),
+            title: "Paella".to_string(),
+            description: "Traditional Spanish dish".to_string(),
+            categories: vec!["Rice".to_string()],
+            ingredients: vec!["Rice".to_string(), "Saffron".to_string()],
+            steps: vec!["Cook rice".to_string()],
+            calories: Some(600),
+            recipe_cuisine: None, // missing
+            recipe_yield: Some(4),
+        };
+
+        let (prompt, schema) = build_prompt_and_schema(&recipe);
+        assert!(prompt.contains("1. Recipe cuisine (must be selected from the allowed enum list)."));
+        assert!(!prompt.contains("Calories"));
+        assert!(!prompt.contains("Recipe yield"));
+
+        let req_array = schema["required"].as_array().unwrap();
+        assert_eq!(req_array.len(), 1);
+        assert_eq!(req_array[0], "recipeCuisine");
+        assert!(schema["properties"].get("calories").is_none());
+        assert!(schema["properties"].get("recipeYield").is_none());
+        assert!(schema["properties"].get("recipeCuisine").is_some());
+    }
+
+    #[test]
+    fn test_build_prompt_and_schema_multiple_missing_fields() {
+        let recipe = Recipe {
+            id: ObjectId::new(),
+            title: "Tacos".to_string(),
+            description: "Tasty tacos".to_string(),
+            categories: vec![],
+            ingredients: vec!["Tortilla".to_string()],
+            steps: vec!["Assemble".to_string()],
+            calories: None,       // missing
+            recipe_cuisine: None, // missing
+            recipe_yield: None,   // missing
+        };
+
+        let (prompt, schema) = build_prompt_and_schema(&recipe);
+        assert!(prompt.contains("1. Calories"));
+        assert!(prompt.contains("2. Recipe cuisine"));
+        assert!(prompt.contains("3. Recipe yield"));
+
+        let req_array = schema["required"].as_array().unwrap();
+        assert_eq!(req_array.len(), 3);
+        assert!(schema["properties"].get("calories").is_some());
+        assert!(schema["properties"].get("recipeCuisine").is_some());
+        assert!(schema["properties"].get("recipeYield").is_some());
     }
 }

@@ -38,8 +38,8 @@ graph TD
 
 ### MongoDB (Core Data Store)
 Tagatoni reads recipes directly from Jorbites' primary MongoDB store.
-- **Query**: Searches for recipes where `calories` is missing/null **or** `recipeCuisine` is missing/null.
-- **Update**: Enriches the document using the `$set` operator to add fields.
+- **Query**: Searches for recipes where `calories`, `recipeCuisine`, or `recipeYield` is missing/null.
+- **Update**: Enriches the document using the `$set` operator. Only fields that were missing in the original document are set; existing non-null fields are preserved and never overwritten.
 
 ### Turso (Audit & State Preservation)
 To keep the audit process robust, scalable, and independent of MongoDB query limits, we maintain an audit log in **Turso (libSQL)**.
@@ -55,7 +55,7 @@ To keep the audit process robust, scalable, and independent of MongoDB query lim
   ```
 - **State Flow**:
   - `ok`: Recipe successfully audited.
-  - `skipped`: Recipe already has both fields filled (avoids double auditing).
+  - `skipped`: Recipe already has all targeted fields filled (avoids double auditing).
   - `error`: Failed to process. A cooldown period must pass before retrying.
 
 ---
@@ -63,16 +63,17 @@ To keep the audit process robust, scalable, and independent of MongoDB query lim
 ## 4. Gemini 3.5 Flash Interactions API Integration
 
 Tagatoni uses the **Interactions API** (`/v1beta/interactions`) to obtain structured output representing the metadata.
+- **Dynamic Prompt & Partial Field Auditing**: Tagatoni checks which specific fields are missing (`calories`, `recipeCuisine`, `recipeYield`) for the recipe and dynamically generates a prompt requesting only those missing fields. Already-fulfilled fields are excluded from the request.
 - **Thinking Configuration**: The agent specifies `"thinking_level": "minimal"` to match free-tier guidelines.
-- **Output Constraints**: An enforced JSON schema guarantees that the model returns exactly the JSON structure:
+- **Output Constraints**: A dynamically constructed JSON schema guarantees that the model returns only the JSON structure for the requested missing fields:
   ```json
   {
-    "calories": <integer>,
-    "recipeCuisine": <string>,
-    "recipeYield": <integer>
+    "calories": <integer (optional)>,
+    "recipeCuisine": <string (optional)>,
+    "recipeYield": <integer (optional)>
   }
   ```
-- **Cuisine Classification Enum List**: To prevent hallucinations, spelling variations, and inconsistent casings (e.g. "mexicano", "TexMex", "mexican cuisine"), the JSON schema enforces a strict string `enum` list in `recipeCuisine`. The allowed values are:
+- **Cuisine Classification Enum List**: When `recipeCuisine` is missing, to prevent hallucinations, spelling variations, and inconsistent casings (e.g. "mexicano", "TexMex", "mexican cuisine"), the JSON schema enforces a strict string `enum` list in `recipeCuisine`. The allowed values are:
   - `Spanish`, `Catalan`, `Italian`, `Mexican`, `Japanese`, `Chinese`, `Indian`, `French`, `American`, `Mediterranean`, `Middle Eastern`, `Greek`, `Thai`, `Vietnamese`, `Moroccan`, `Turkish`, `Latin American`, `Caribbean`, `Nordic`, `British`, `German`, `Eastern European`, `African`, `Asian Fusion`, `International`
 - **Robust Parsing**: The Interactions API returns a stateful `steps` timeline. Tagatoni iterates over the output steps to locate the `model_output` step, extracts the generated JSON, and deserializes it directly into the application model.
 
