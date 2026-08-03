@@ -172,14 +172,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 5. Update MongoDB
         info!(
-            "Audit successful for recipe {}: Calories = {}, Cuisine = {}, Yield = {}. Updating MongoDB...",
+            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}. Updating MongoDB...",
             recipe_title, audit_result.calories, audit_result.recipe_cuisine, audit_result.recipe_yield
         );
         match mongo_service
             .update_recipe_seo(
                 &recipe.id,
                 audit_result.calories,
-                &audit_result.recipe_cuisine,
+                audit_result.recipe_cuisine.as_deref(),
                 audit_result.recipe_yield,
             )
             .await
