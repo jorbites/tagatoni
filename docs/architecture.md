@@ -9,7 +9,8 @@ This document details the system design, purpose, architectural decisions, and e
 Tagatoni is a background daemon designed to automatically audit recipes posted in the Jorbites ecosystem. Using AI, it populates missing metadata required for SEO optimization and a better consumer user experience:
 - **Calories**: An estimated count of calories per serving.
 - **Recipe Cuisine**: Classification of cuisine origin (e.g., Italian, Spanish, Mexican, Mediterranean).
-- **Recipe Yield**: Estmates the yield/servings of the recipe (e.g. "4 servings").
+- **Recipe Yield**: Estimates the yield/servings of the recipe (e.g. "4 servings").
+- **Gantt Table**: A visual cooking-flow matrix organizing ingredients as rows and cooking actions as column spans.
 
 ---
 
@@ -21,7 +22,7 @@ Tagatoni runs as an always-on background process, interacting with MongoDB, Turs
 
 ```mermaid
 graph TD
-    A[Start Loop] --> B[Fetch recipe from MongoDB where calories/cuisine IS NULL]
+    A[Start Loop] --> B[Fetch recipe from MongoDB where calories/cuisine/yield/ganttTable IS NULL]
     B -- None found --> C[Sleep 10 minutes] --> A
     B -- Recipe found --> D{Turso: Needs Processing?}
     D -- No (Ok/Skipped/Error Cooldown) --> A
@@ -38,7 +39,7 @@ graph TD
 
 ### MongoDB (Core Data Store)
 Tagatoni reads recipes directly from Jorbites' primary MongoDB store.
-- **Query**: Searches for recipes where `calories`, `recipeCuisine`, or `recipeYield` is missing/null.
+- **Query**: Searches for recipes where `calories`, `recipeCuisine`, `recipeYield`, or `ganttTable` is missing/null.
 - **Update**: Enriches the document using the `$set` operator. Only fields that were missing in the original document are set; existing non-null fields are preserved and never overwritten.
 
 ### Turso (Audit & State Preservation)
@@ -63,14 +64,15 @@ To keep the audit process robust, scalable, and independent of MongoDB query lim
 ## 4. Gemini 3.5 Flash Interactions API Integration
 
 Tagatoni uses the **Interactions API** (`/v1beta/interactions`) to obtain structured output representing the metadata.
-- **Dynamic Prompt & Partial Field Auditing**: Tagatoni checks which specific fields are missing (`calories`, `recipeCuisine`, `recipeYield`) for the recipe and dynamically generates a prompt requesting only those missing fields. Already-fulfilled fields are excluded from the request.
+- **Dynamic Prompt & Partial Field Auditing**: Tagatoni checks which specific fields are missing (`calories`, `recipeCuisine`, `recipeYield`, `ganttTable`) for the recipe and dynamically generates a prompt requesting only those missing fields. Already-fulfilled fields are excluded from the request.
 - **Thinking Configuration**: The agent specifies `"thinking_level": "minimal"` to match free-tier guidelines.
 - **Output Constraints**: A dynamically constructed JSON schema guarantees that the model returns only the JSON structure for the requested missing fields:
   ```json
   {
     "calories": <integer (optional)>,
     "recipeCuisine": <string (optional)>,
-    "recipeYield": <integer (optional)>
+    "recipeYield": <integer (optional)>,
+    "ganttTable": <object (optional) { preSteps, rows, columns }>
   }
   ```
 - **Cuisine Classification Enum List**: When `recipeCuisine` is missing, to prevent hallucinations, spelling variations, and inconsistent casings (e.g. "mexicano", "TexMex", "mexican cuisine"), the JSON schema enforces a strict string `enum` list in `recipeCuisine`. The allowed values are:

@@ -18,6 +18,8 @@ pub struct Recipe {
     pub recipe_cuisine: Option<String>,
     #[serde(rename = "recipeYield")]
     pub recipe_yield: Option<i32>,
+    #[serde(rename = "ganttTable")]
+    pub gantt_table: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -68,5 +70,31 @@ mod tests {
         assert_eq!(recipe.calories, None);
         assert_eq!(recipe.recipe_cuisine, None);
         assert_eq!(recipe.recipe_yield, None);
+        assert_eq!(recipe.gantt_table, None);
+    }
+
+    #[test]
+    fn test_deserialize_recipe_with_gantt_table() {
+        let recipe_json = json!({
+            "_id": { "$oid": "507f1f77bcf86cd799439011" },
+            "title": "Brownies",
+            "description": "Chocolate brownies",
+            "categories": ["Dessert"],
+            "ingredients": ["Butter", "Sugar"],
+            "steps": ["Melt butter", "Mix"],
+            "calories": 400,
+            "recipeCuisine": "American",
+            "recipeYield": 8,
+            "ganttTable": {
+                "preSteps": ["Preheat oven"],
+                "rows": [{"ingredient": "Butter", "group": 0}],
+                "columns": [{"action": "melt", "rowSpan": [0, 0], "colIndex": 0}]
+            }
+        });
+
+        let recipe: Recipe = serde_json::from_value(recipe_json).unwrap();
+        assert!(recipe.gantt_table.is_some());
+        let table = recipe.gantt_table.unwrap();
+        assert_eq!(table["preSteps"][0], "Preheat oven");
     }
 }
