@@ -30,7 +30,7 @@ pub fn build_set_document(
                 set_doc.insert("ganttTable", bson_val);
             }
             Err(e) => {
-                eprintln!("Failed to convert ganttTable to BSON: {}", e);
+                tracing::error!("Failed to convert ganttTable to BSON: {}", e);
             }
         }
     }
