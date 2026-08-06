@@ -51,36 +51,52 @@ pub struct AuditResult {
     pub recipe_cuisine: Option<String>,
     #[serde(rename = "recipeYield")]
     pub recipe_yield: Option<i32>,
+    #[serde(rename = "ganttTable")]
+    pub gantt_table: Option<Value>,
 }
 
 pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
     let need_calories = recipe.calories.is_none();
     let need_cuisine = recipe.recipe_cuisine.is_none();
     let need_yield = recipe.recipe_yield.is_none();
+    let need_gantt = recipe.gantt_table.is_none();
 
     let mut request_items = Vec::new();
-    let mut item_counter = 1;
 
     if need_calories {
         request_items.push(format!(
             "{}. Calories (an integer representing estimated calories per serving).",
-            item_counter
+            request_items.len() + 1
         ));
-        item_counter += 1;
     }
 
     if need_cuisine {
         request_items.push(format!(
             "{}. Recipe cuisine (must be selected from the allowed enum list).",
-            item_counter
+            request_items.len() + 1
         ));
-        item_counter += 1;
     }
 
     if need_yield {
         request_items.push(format!(
             "{}. Recipe yield (an integer representing the estimated number of servings, e.g. 4).",
-            item_counter
+            request_items.len() + 1
+        ));
+    }
+
+    if need_gantt {
+        request_items.push(format!(
+            "{}. Gantt Table — a visual cooking-flow table organizing the recipe as a grid.
+rows MUST contain an entry for EVERY ingredient in the recipe's ingredients array, maintaining the exact same order (0-indexed).
+Columns represent sequential cooking actions (e.g., \"melt\", \"mix\", \"fold in\", \"bake\").
+Each action cell spans a range of ingredient rows [startRow, endRow] (INCLUSIVE, e.g. [0, 2] means rows 0, 1, and 2 participate).
+Group ingredients by their first shared action step (integer group ID starting at 0).
+Use the same language as the recipe for all text (preSteps, ingredient names, action labels).
+Return object structure:
+- preSteps: array of preparation step strings (e.g. \"Preheat oven to 350°F\")
+- rows: array of objects {{ \"ingredient\": string, \"group\": integer }}
+- columns: array of objects {{ \"action\": string, \"rowSpan\": [startRow, endRow], \"colIndex\": integer }}",
+            request_items.len() + 1
         ));
     }
 
@@ -121,31 +137,10 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
         properties["recipeCuisine"] = json!({
             "type": "string",
             "enum": [
-                "Spanish",
-                "Catalan",
-                "Italian",
-                "Mexican",
-                "Japanese",
-                "Chinese",
-                "Indian",
-                "French",
-                "American",
-                "Mediterranean",
-                "Middle Eastern",
-                "Greek",
-                "Thai",
-                "Vietnamese",
-                "Moroccan",
-                "Turkish",
-                "Latin American",
-                "Caribbean",
-                "Nordic",
-                "British",
-                "German",
-                "Eastern European",
-                "African",
-                "Asian Fusion",
-                "International"
+                "Spanish", "Catalan", "Italian", "Mexican", "Japanese", "Chinese", "Indian",
+                "French", "American", "Mediterranean", "Middle Eastern", "Greek", "Thai",
+                "Vietnamese", "Moroccan", "Turkish", "Latin American", "Caribbean", "Nordic",
+                "British", "German", "Eastern European", "African", "Asian Fusion", "International"
             ]
         });
         property_ordering.push("recipeCuisine");
@@ -156,6 +151,49 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
         properties["recipeYield"] = json!({ "type": "integer" });
         property_ordering.push("recipeYield");
         required.push("recipeYield");
+    }
+
+    if need_gantt {
+        properties["ganttTable"] = json!({
+            "type": "object",
+            "properties": {
+                "preSteps": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ingredient": { "type": "string" },
+                            "group": { "type": "integer" }
+                        },
+                        "required": ["ingredient", "group"]
+                    }
+                },
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": { "type": "string" },
+                            "rowSpan": {
+                                "type": "array",
+                                "items": { "type": "integer" },
+                                "minItems": 2,
+                                "maxItems": 2
+                            },
+                            "colIndex": { "type": "integer" }
+                        },
+                        "required": ["action", "rowSpan", "colIndex"]
+                    }
+                }
+            },
+            "required": ["preSteps", "rows", "columns"]
+        });
+        property_ordering.push("ganttTable");
+        required.push("ganttTable");
     }
 
     let response_schema = json!({
@@ -171,10 +209,11 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
 impl GeminiService {
     pub fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(90))
             .build()
             .unwrap_or_default();
-        Self { client, api_key }
+
+        Self { api_key, client }
     }
 
     /// Calls the Gemini Interactions API to audit a recipe and extract missing SEO metadata.
@@ -319,6 +358,16 @@ mod tests {
         assert_eq!(result.calories, Some(500));
         assert_eq!(result.recipe_cuisine, Some("Spanish".to_string()));
         assert_eq!(result.recipe_yield, Some(2));
+        assert_eq!(result.gantt_table, None);
+    }
+
+    #[test]
+    fn test_audit_result_deserialization_with_gantt_table() {
+        let raw_json =
+            "{\"ganttTable\": {\"preSteps\": [\"Heat oven\"], \"rows\": [], \"columns\": []}}";
+        let result: AuditResult = serde_json::from_str(raw_json).unwrap();
+        assert!(result.gantt_table.is_some());
+        assert_eq!(result.gantt_table.unwrap()["preSteps"][0], "Heat oven");
     }
 
     #[test]
@@ -328,6 +377,7 @@ mod tests {
         assert_eq!(result.calories, None);
         assert_eq!(result.recipe_cuisine, Some("Italian".to_string()));
         assert_eq!(result.recipe_yield, None);
+        assert_eq!(result.gantt_table, None);
     }
 
     #[test]
@@ -342,12 +392,14 @@ mod tests {
             calories: Some(600),
             recipe_cuisine: None, // missing
             recipe_yield: Some(4),
+            gantt_table: Some(json!({})),
         };
 
         let (prompt, schema) = build_prompt_and_schema(&recipe);
         assert!(prompt.contains("1. Recipe cuisine (must be selected from the allowed enum list)."));
         assert!(!prompt.contains("Calories"));
         assert!(!prompt.contains("Recipe yield"));
+        assert!(!prompt.contains("Gantt Table"));
 
         let req_array = schema["required"].as_array().unwrap();
         assert_eq!(req_array.len(), 1);
@@ -355,6 +407,34 @@ mod tests {
         assert!(schema["properties"].get("calories").is_none());
         assert!(schema["properties"].get("recipeYield").is_none());
         assert!(schema["properties"].get("recipeCuisine").is_some());
+        assert!(schema["properties"].get("ganttTable").is_none());
+    }
+
+    #[test]
+    fn test_build_prompt_and_schema_gantt_only() {
+        let recipe = Recipe {
+            id: ObjectId::new(),
+            title: "Paella".to_string(),
+            description: "Traditional Spanish dish".to_string(),
+            categories: vec!["Rice".to_string()],
+            ingredients: vec!["Rice".to_string(), "Saffron".to_string()],
+            steps: vec!["Cook rice".to_string()],
+            calories: Some(600),
+            recipe_cuisine: Some("Spanish".to_string()),
+            recipe_yield: Some(4),
+            gantt_table: None, // missing
+        };
+
+        let (prompt, schema) = build_prompt_and_schema(&recipe);
+        assert!(prompt.contains("1. Gantt Table"));
+        assert!(!prompt.contains("Calories"));
+        assert!(!prompt.contains("Recipe cuisine"));
+        assert!(!prompt.contains("Recipe yield"));
+
+        let req_array = schema["required"].as_array().unwrap();
+        assert_eq!(req_array.len(), 1);
+        assert_eq!(req_array[0], "ganttTable");
+        assert!(schema["properties"].get("ganttTable").is_some());
     }
 
     #[test]
@@ -369,17 +449,20 @@ mod tests {
             calories: None,       // missing
             recipe_cuisine: None, // missing
             recipe_yield: None,   // missing
+            gantt_table: None,    // missing
         };
 
         let (prompt, schema) = build_prompt_and_schema(&recipe);
         assert!(prompt.contains("1. Calories"));
         assert!(prompt.contains("2. Recipe cuisine"));
         assert!(prompt.contains("3. Recipe yield"));
+        assert!(prompt.contains("4. Gantt Table"));
 
         let req_array = schema["required"].as_array().unwrap();
-        assert_eq!(req_array.len(), 3);
+        assert_eq!(req_array.len(), 4);
         assert!(schema["properties"].get("calories").is_some());
         assert!(schema["properties"].get("recipeCuisine").is_some());
         assert!(schema["properties"].get("recipeYield").is_some());
+        assert!(schema["properties"].get("ganttTable").is_some());
     }
 }

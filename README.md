@@ -1,6 +1,6 @@
 # Tagatoni 🏷️
 
-Tagatoni is a robust, always-running autonomous agent in the Jorbites ecosystem designed to audit and enrich posted recipes by adding missing fields (`calories` and `recipeCuisine`) for SEO and user experience.
+Tagatoni is a robust, always-running autonomous agent in the Jorbites ecosystem designed to audit and enrich posted recipes by adding missing fields (`calories`, `recipeCuisine`, `recipeYield`, and `ganttTable`) for SEO and user experience.
 
 <p align="center">
   <img src="./docs/assets/tagatoni.png" alt="Tagatoni Logo" width="240" />
@@ -11,6 +11,7 @@ See the [Tagatoni Architecture and System Design](./docs/architecture.md) and th
 ## Features
 
 - **Paced Processing**: Respects the Gemini API free tier limits by processing one recipe at a time with a configurable delay (default: `60` seconds / 1 RPM).
+- **Gantt Table Generation**: Visualizes recipe cooking steps as a dynamic ingredient-action matrix.
 - **Persistent State**: Uses **Turso (libSQL)** to keep track of audited, skipped, and failed recipes.
 - **Fail-Safe & Resilient**:
   - Automatically catches all errors (network, parsing, database issues) without panicking.

@@ -12,6 +12,7 @@ pub fn build_set_document(
     calories: Option<i32>,
     recipe_cuisine: Option<&str>,
     recipe_yield: Option<i32>,
+    gantt_table: Option<&serde_json::Value>,
 ) -> mongodb::bson::Document {
     let mut set_doc = doc! {};
     if let Some(cal) = calories {
@@ -23,6 +24,16 @@ pub fn build_set_document(
     if let Some(y) = recipe_yield {
         set_doc.insert("recipeYield", y);
     }
+    if let Some(gt) = gantt_table {
+        match mongodb::bson::to_bson(gt) {
+            Ok(bson_val) => {
+                set_doc.insert("ganttTable", bson_val);
+            }
+            Err(e) => {
+                tracing::error!("Failed to convert ganttTable to BSON: {}", e);
+            }
+        }
+    }
     set_doc
 }
 
@@ -31,8 +42,7 @@ impl MongoService {
         Self { client, db_name }
     }
 
-    /// Fetches a single recipe that has missing calories, missing recipeCuisine, or missing recipeYield.
-    /// We search for documents where calories is null or doesn't exist, OR recipeCuisine is null or doesn't exist, OR recipeYield is null or doesn't exist.
+    /// Fetches a single recipe that has missing calories, recipeCuisine, recipeYield, or ganttTable.
     pub async fn fetch_next_recipe_to_audit(
         &self,
     ) -> Result<Option<Recipe>, mongodb::error::Error> {
@@ -48,7 +58,9 @@ impl MongoService {
                 { "recipeCuisine": { "$exists": false } },
                 { "recipeCuisine": null },
                 { "recipeYield": { "$exists": false } },
-                { "recipeYield": null }
+                { "recipeYield": null },
+                { "ganttTable": { "$exists": false } },
+                { "ganttTable": null }
             ]
         };
 
@@ -61,8 +73,9 @@ impl MongoService {
         calories: Option<i32>,
         recipe_cuisine: Option<&str>,
         recipe_yield: Option<i32>,
+        gantt_table: Option<&serde_json::Value>,
     ) -> Result<(), mongodb::error::Error> {
-        let set_doc = build_set_document(calories, recipe_cuisine, recipe_yield);
+        let set_doc = build_set_document(calories, recipe_cuisine, recipe_yield, gantt_table);
         if set_doc.is_empty() {
             return Ok(());
         }
@@ -83,28 +96,43 @@ impl MongoService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_build_set_document_all_fields() {
-        let doc = build_set_document(Some(500), Some("Italian"), Some(4));
+        let gt = json!({"preSteps": [], "rows": [], "columns": []});
+        let doc = build_set_document(Some(500), Some("Italian"), Some(4), Some(&gt));
         assert_eq!(doc.get_i32("calories").unwrap(), 500);
         assert_eq!(doc.get_str("recipeCuisine").unwrap(), "Italian");
         assert_eq!(doc.get_i32("recipeYield").unwrap(), 4);
-        assert_eq!(doc.len(), 3);
+        assert!(doc.get("ganttTable").is_some());
+        assert_eq!(doc.len(), 4);
     }
 
     #[test]
     fn test_build_set_document_partial_fields() {
-        let doc = build_set_document(None, Some("Mexican"), None);
+        let doc = build_set_document(None, Some("Mexican"), None, None);
         assert!(doc.get("calories").is_none());
         assert_eq!(doc.get_str("recipeCuisine").unwrap(), "Mexican");
         assert!(doc.get("recipeYield").is_none());
+        assert!(doc.get("ganttTable").is_none());
+        assert_eq!(doc.len(), 1);
+    }
+
+    #[test]
+    fn test_build_set_document_gantt_only() {
+        let gt = json!({"preSteps": ["Preheat"], "rows": [], "columns": []});
+        let doc = build_set_document(None, None, None, Some(&gt));
+        assert!(doc.get("calories").is_none());
+        assert!(doc.get("recipeCuisine").is_none());
+        assert!(doc.get("recipeYield").is_none());
+        assert!(doc.get("ganttTable").is_some());
         assert_eq!(doc.len(), 1);
     }
 
     #[test]
     fn test_build_set_document_empty() {
-        let doc = build_set_document(None, None, None);
+        let doc = build_set_document(None, None, None, None);
         assert!(doc.is_empty());
     }
 }

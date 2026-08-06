@@ -114,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if recipe.calories.is_some()
             && recipe.recipe_cuisine.is_some()
             && recipe.recipe_yield.is_some()
+            && recipe.gantt_table.is_some()
         {
             info!(
                 "Recipe {} ({}) already has all fields populated in MongoDB. Marking as skipped.",
@@ -172,8 +173,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 5. Update MongoDB
         info!(
-            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}. Updating MongoDB...",
-            recipe_title, audit_result.calories, audit_result.recipe_cuisine, audit_result.recipe_yield
+            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}, GanttTable = {}. Updating MongoDB...",
+            recipe_title,
+            audit_result.calories,
+            audit_result.recipe_cuisine,
+            audit_result.recipe_yield,
+            if audit_result.gantt_table.is_some() { "Present" } else { "None" }
         );
         match mongo_service
             .update_recipe_seo(
@@ -181,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 audit_result.calories,
                 audit_result.recipe_cuisine.as_deref(),
                 audit_result.recipe_yield,
+                audit_result.gantt_table.as_ref(),
             )
             .await
         {
