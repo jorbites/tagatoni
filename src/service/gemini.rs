@@ -88,10 +88,17 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
         request_items.push(format!(
             "{}. Gantt Table — a visual cooking-flow table organizing the recipe as a grid.
 rows MUST contain an entry for EVERY ingredient in the recipe's ingredients array, maintaining the exact same order (0-indexed).
-Columns represent sequential cooking actions (e.g., \"melt\", \"mix\", \"fold in\", \"bake\").
+Columns represent sequential cooking actions (e.g., \"batir\", \"añadir y mezclar\", \"hornear 75 min a 180°C\").
 Each action cell spans a range of ingredient rows [startRow, endRow] (INCLUSIVE, e.g. [0, 2] means rows 0, 1, and 2 participate).
 Group ingredients by their first shared action step (integer group ID starting at 0).
-Use the same language as the recipe for all text (preSteps, ingredient names, action labels).
+CRITICAL FOR ACTION TEXT CONCISENESS:
+- Action labels MUST be short and concise (1 to 4 words max).
+- DO NOT repeat or list ingredient names in the action text! The cell rowSpan already visually links the action to its ingredients.
+  * BAD: \"añadir harina, azúcares, levadura, canela y sal y volver a batir\"
+  * GOOD: \"añadir y batir\" or \"mezclar y batir\"
+  * BAD: \"añadir zanahoria y nueces\"
+  * GOOD: \"incorporar y batir\"
+- Use the exact same language as the recipe for all text (preSteps, ingredient names, action labels).
 Return object structure:
 - preSteps: array of preparation step strings (e.g. \"Preheat oven to 350°F\")
 - rows: array of objects {{ \"ingredient\": string, \"group\": integer }}
