@@ -233,7 +233,7 @@ impl GeminiService {
         let (prompt, response_schema) = build_prompt_and_schema(recipe);
 
         let payload = GeminiRequest {
-            model: "models/gemini-3.5-flash".to_string(),
+            model: "models/gemini-3.5-flash-lite".to_string(),
             input: prompt,
             generation_config: GenerationConfig {
                 temperature: 1.0,
