@@ -2,6 +2,8 @@
 name = "tagatoni"
 version = "0.3.0"
 edition = "2021"
+publish = false
+repository = "https://github.com/jorbites/tagatoni"
 
 [dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
