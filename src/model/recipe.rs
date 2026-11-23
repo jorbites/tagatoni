@@ -13,6 +13,10 @@ pub struct Recipe {
     pub ingredients: Vec<String>,
     #[serde(default)]
     pub steps: Vec<String>,
+    #[serde(default)]
+    pub minutes: Option<i32>,
+    #[serde(default)]
+    pub method: Option<String>,
     pub calories: Option<i32>,
     #[serde(rename = "recipeCuisine")]
     pub recipe_cuisine: Option<String>,
@@ -20,6 +24,48 @@ pub struct Recipe {
     pub recipe_yield: Option<i32>,
     #[serde(rename = "ganttTable")]
     pub gantt_table: Option<serde_json::Value>,
+    pub difficulty: Option<String>,
+    pub protein: Option<i32>,
+    pub carbohydrates: Option<i32>,
+    pub fat: Option<i32>,
+    #[serde(rename = "saturatedFat")]
+    pub saturated_fat: Option<i32>,
+    pub fiber: Option<i32>,
+    pub sugar: Option<i32>,
+    pub sodium: Option<i32>,
+    #[serde(rename = "dietaryTags")]
+    pub dietary_tags: Option<Vec<String>>,
+}
+
+impl Recipe {
+    /// Returns true if dietary tags have not yet been audited.
+    ///
+    /// Existing legacy documents omit `dietaryTags` (`None`). Newly created
+    /// recipes written via Prisma initialize `dietaryTags` to `[]` while
+    /// `difficulty` is still `None`, so an empty array alongside a missing
+    /// `difficulty` also indicates an unaudited recipe.
+    pub fn needs_dietary_tags(&self) -> bool {
+        self.dietary_tags.is_none()
+            || (self.dietary_tags.as_ref().is_some_and(|t| t.is_empty())
+                && self.difficulty.is_none())
+    }
+
+    /// Returns true if every Tagatoni-managed field is already populated.
+    pub fn is_fully_audited(&self) -> bool {
+        self.calories.is_some()
+            && self.recipe_cuisine.is_some()
+            && self.recipe_yield.is_some()
+            && self.gantt_table.is_some()
+            && self.difficulty.is_some()
+            && self.protein.is_some()
+            && self.carbohydrates.is_some()
+            && self.fat.is_some()
+            && self.saturated_fat.is_some()
+            && self.fiber.is_some()
+            && self.sugar.is_some()
+            && self.sodium.is_some()
+            && !self.needs_dietary_tags()
+    }
 }
 
 #[cfg(test)]
@@ -36,9 +82,20 @@ mod tests {
             "categories": ["Pasta", "Italian"],
             "ingredients": ["Spaghetti", "Pancetta", "Eggs", "Pecorino Romano"],
             "steps": ["Boil pasta", "Fry pancetta", "Mix egg yolk with cheese", "Combine and toss"],
+            "minutes": 25,
+            "method": "Frying pan",
             "calories": 650,
             "recipeCuisine": "Italian",
-            "recipeYield": 4
+            "recipeYield": 4,
+            "difficulty": "Medium",
+            "protein": 28,
+            "carbohydrates": 72,
+            "fat": 26,
+            "saturatedFat": 10,
+            "fiber": 3,
+            "sugar": 2,
+            "sodium": 820,
+            "dietaryTags": ["high-protein"]
         });
 
         let recipe: Recipe = serde_json::from_value(recipe_json).unwrap();
@@ -47,9 +104,22 @@ mod tests {
         assert_eq!(recipe.categories.len(), 2);
         assert_eq!(recipe.ingredients[0], "Spaghetti");
         assert_eq!(recipe.steps[2], "Mix egg yolk with cheese");
+        assert_eq!(recipe.minutes, Some(25));
+        assert_eq!(recipe.method, Some("Frying pan".to_string()));
         assert_eq!(recipe.calories, Some(650));
         assert_eq!(recipe.recipe_cuisine, Some("Italian".to_string()));
         assert_eq!(recipe.recipe_yield, Some(4));
+        assert_eq!(recipe.difficulty, Some("Medium".to_string()));
+        assert_eq!(recipe.protein, Some(28));
+        assert_eq!(recipe.carbohydrates, Some(72));
+        assert_eq!(recipe.fat, Some(26));
+        assert_eq!(recipe.saturated_fat, Some(10));
+        assert_eq!(recipe.fiber, Some(3));
+        assert_eq!(recipe.sugar, Some(2));
+        assert_eq!(recipe.sodium, Some(820));
+        assert_eq!(recipe.dietary_tags, Some(vec!["high-protein".to_string()]));
+        assert!(!recipe.needs_dietary_tags());
+        assert!(!recipe.is_fully_audited()); // missing ganttTable
     }
 
     #[test]
@@ -71,6 +141,58 @@ mod tests {
         assert_eq!(recipe.recipe_cuisine, None);
         assert_eq!(recipe.recipe_yield, None);
         assert_eq!(recipe.gantt_table, None);
+        assert_eq!(recipe.difficulty, None);
+        assert_eq!(recipe.protein, None);
+        assert_eq!(recipe.carbohydrates, None);
+        assert_eq!(recipe.fat, None);
+        assert_eq!(recipe.saturated_fat, None);
+        assert_eq!(recipe.fiber, None);
+        assert_eq!(recipe.sugar, None);
+        assert_eq!(recipe.sodium, None);
+        assert_eq!(recipe.dietary_tags, None);
+        assert!(recipe.needs_dietary_tags());
+        assert!(!recipe.is_fully_audited());
+    }
+
+    #[test]
+    fn test_needs_dietary_tags_distinguishes_prisma_default_from_audited_empty() {
+        let unaudited_prisma_json = json!({
+            "_id": { "$oid": "507f1f77bcf86cd799439011" },
+            "title": "New Recipe",
+            "description": "Just created",
+            "categories": [],
+            "ingredients": ["Flour"],
+            "steps": ["Mix"],
+            "difficulty": null,
+            "dietaryTags": []
+        });
+        let unaudited: Recipe = serde_json::from_value(unaudited_prisma_json).unwrap();
+        assert!(unaudited.needs_dietary_tags());
+
+        let audited_empty_json = json!({
+            "_id": { "$oid": "507f1f77bcf86cd799439011" },
+            "title": "Audited Recipe",
+            "description": "No dietary tags apply",
+            "categories": [],
+            "ingredients": ["Flour", "Pork", "Butter"],
+            "steps": ["Cook"],
+            "calories": 500,
+            "recipeCuisine": "Spanish",
+            "recipeYield": 4,
+            "ganttTable": {"preSteps": [], "rows": [], "columns": []},
+            "difficulty": "Easy",
+            "protein": 20,
+            "carbohydrates": 45,
+            "fat": 25,
+            "saturatedFat": 9,
+            "fiber": 2,
+            "sugar": 3,
+            "sodium": 600,
+            "dietaryTags": []
+        });
+        let audited: Recipe = serde_json::from_value(audited_empty_json).unwrap();
+        assert!(!audited.needs_dietary_tags());
+        assert!(audited.is_fully_audited());
     }
 
     #[test]

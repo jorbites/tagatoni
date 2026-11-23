@@ -1,7 +1,31 @@
+use chrono::{DateTime, Utc};
 use libsql::{params, Database};
 
 pub struct TursoService {
     db: Database,
+}
+
+/// Pure helper determining whether an errored recipe is still blocked
+/// (either retries exhausted or cooldown period has not elapsed).
+pub fn is_error_blocked(
+    retry_count: i64,
+    last_attempt_str: &str,
+    max_retries: i64,
+    cooldown_hours: i64,
+    now: DateTime<Utc>,
+) -> bool {
+    if retry_count >= max_retries {
+        return true;
+    }
+
+    if let Ok(last_attempt) = DateTime::parse_from_rfc3339(last_attempt_str) {
+        let duration = now.signed_duration_since(last_attempt.with_timezone(&Utc));
+        if duration.num_hours() < cooldown_hours {
+            return true;
+        }
+    }
+
+    false
 }
 
 impl TursoService {
@@ -24,6 +48,42 @@ impl TursoService {
         .await?;
 
         Ok(Self { db })
+    }
+
+    /// Returns recipe IDs currently in `error` status that cannot be retried yet
+    /// (retries exhausted or within cooldown), so MongoDB can skip them in `$nin`.
+    pub async fn get_blocked_error_recipe_ids(
+        &self,
+        max_retries: i64,
+        cooldown_hours: i64,
+    ) -> Result<Vec<String>, libsql::Error> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT recipe_id, retry_count, last_attempt FROM audited_recipes WHERE status = 'error'",
+                (),
+            )
+            .await?;
+
+        let now = Utc::now();
+        let mut blocked = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let recipe_id: String = row.get(0)?;
+            let retry_count: i64 = row.get(1)?;
+            let last_attempt_str: String = row.get(2)?;
+
+            if is_error_blocked(
+                retry_count,
+                &last_attempt_str,
+                max_retries,
+                cooldown_hours,
+                now,
+            ) {
+                blocked.push(recipe_id);
+            }
+        }
+
+        Ok(blocked)
     }
 
     /// Determines if a recipe needs auditing or a retry.
@@ -52,20 +112,13 @@ impl TursoService {
             }
 
             if status == "error" {
-                if retry_count >= max_retries {
-                    return Ok(false); // Retries exhausted
-                }
-
-                // Check retry cooldown
-                if let Ok(last_attempt) = chrono::DateTime::parse_from_rfc3339(&last_attempt_str) {
-                    let now = chrono::Utc::now();
-                    let duration =
-                        now.signed_duration_since(last_attempt.with_timezone(&chrono::Utc));
-                    if duration.num_hours() < cooldown_hours {
-                        return Ok(false); // Cooldown hasn't passed
-                    }
-                }
-                return Ok(true); // Ready for retry
+                return Ok(!is_error_blocked(
+                    retry_count,
+                    &last_attempt_str,
+                    max_retries,
+                    cooldown_hours,
+                    Utc::now(),
+                ));
             }
 
             Ok(false)
@@ -76,7 +129,7 @@ impl TursoService {
 
     pub async fn mark_ok(&self, recipe_id: &str) -> Result<(), libsql::Error> {
         let conn = self.db.connect()?;
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO audited_recipes (recipe_id, status, retry_count, last_attempt, error_msg)
              VALUES (?1, 'ok', 0, ?2, NULL)
@@ -93,7 +146,7 @@ impl TursoService {
 
     pub async fn mark_skipped(&self, recipe_id: &str) -> Result<(), libsql::Error> {
         let conn = self.db.connect()?;
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO audited_recipes (recipe_id, status, retry_count, last_attempt, error_msg)
              VALUES (?1, 'skipped', 0, ?2, NULL)
@@ -110,7 +163,7 @@ impl TursoService {
 
     pub async fn mark_error(&self, recipe_id: &str, error_msg: &str) -> Result<(), libsql::Error> {
         let conn = self.db.connect()?;
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now().to_rfc3339();
 
         // Get current retry count
         let mut rows = conn
@@ -139,5 +192,34 @@ impl TursoService {
         )
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn test_is_error_blocked_exhausted_retries() {
+        let now = Utc::now();
+        let old_attempt = (now - Duration::hours(48)).to_rfc3339();
+        assert!(is_error_blocked(3, &old_attempt, 3, 24, now));
+        assert!(is_error_blocked(4, &old_attempt, 3, 24, now));
+    }
+
+    #[test]
+    fn test_is_error_blocked_within_cooldown() {
+        let now = Utc::now();
+        let recent_attempt = (now - Duration::hours(5)).to_rfc3339();
+        assert!(is_error_blocked(1, &recent_attempt, 3, 24, now));
+    }
+
+    #[test]
+    fn test_is_error_blocked_ready_after_cooldown() {
+        let now = Utc::now();
+        let expired_attempt = (now - Duration::hours(25)).to_rfc3339();
+        assert!(!is_error_blocked(1, &expired_attempt, 3, 24, now));
+        assert!(!is_error_blocked(2, &expired_attempt, 3, 24, now));
     }
 }
