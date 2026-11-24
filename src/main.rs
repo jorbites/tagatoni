@@ -3,7 +3,7 @@ mod model;
 mod service;
 
 use dotenv::dotenv;
-use mongodb::{options::ClientOptions, Client};
+use mongodb::{bson::oid::ObjectId, options::ClientOptions, Client};
 use service::gemini::GeminiService;
 use service::mailer::MailerService;
 use service::mongo::MongoService;
@@ -60,8 +60,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Services initialized. Starting audit loop.");
 
     loop {
-        // 1. Fetch next recipe to audit
-        let fetch_result = mongo_service.fetch_next_recipe_to_audit().await;
+        // 1. Fetch blocked error recipe IDs from Turso so MongoDB skips them in $nin
+        let excluded_oids: Vec<ObjectId> = match turso_service
+            .get_blocked_error_recipe_ids(max_retries, retry_cooldown_hours)
+            .await
+        {
+            Ok(ids) => ids
+                .into_iter()
+                .filter_map(|id| ObjectId::parse_str(&id).ok())
+                .collect(),
+            Err(e) => {
+                error!(
+                    "Error fetching blocked error IDs from Turso: {}. Retrying in 10s...",
+                    e
+                );
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+        };
+
+        // 2. Fetch next recipe to audit
+        let fetch_result = mongo_service
+            .fetch_next_recipe_to_audit(&excluded_oids)
+            .await;
         let recipe = match fetch_result {
             Ok(Some(r)) => r,
             Ok(None) => {
@@ -85,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let recipe_id_str = recipe.id.to_hex();
         let recipe_title = recipe.title.clone();
 
-        // 2. Check Turso to see if it needs processing
+        // 3. Check Turso to see if it needs processing
         match turso_service
             .needs_processing(&recipe_id_str, max_retries, retry_cooldown_hours)
             .await
@@ -110,12 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 3. Double check if all fields are non-null in MongoDB
-        if recipe.calories.is_some()
-            && recipe.recipe_cuisine.is_some()
-            && recipe.recipe_yield.is_some()
-            && recipe.gantt_table.is_some()
-        {
+        // 4. Double check if all fields are non-null in MongoDB
+        if recipe.is_fully_audited() {
             info!(
                 "Recipe {} ({}) already has all fields populated in MongoDB. Marking as skipped.",
                 recipe_title, recipe_id_str
@@ -129,8 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // 4. Call Gemini Interactions API with exponential backoff for transient errors
+        // 5. Call Gemini Interactions API with exponential backoff for transient errors
         let mut gemini_result = None;
+        let mut last_error = String::new();
         let mut backoff_secs = 5;
         for attempt in 1..=3 {
             match gemini_service.audit_recipe(&recipe).await {
@@ -139,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 Err(e) => {
+                    last_error = e.clone();
                     warn!(
                         "Gemini API attempt {} failed for recipe {}: {}.",
                         attempt, recipe_id_str, e
@@ -155,15 +174,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let audit_result = match gemini_result {
             Some(res) => res,
             None => {
-                let err_msg = "Gemini API call failed after 3 attempts with exponential backoff";
+                let err_msg = format!(
+                    "Gemini API call failed after 3 attempts with exponential backoff: {}",
+                    last_error
+                );
                 error!("{}, marking recipe {} as error.", err_msg, recipe_id_str);
 
-                if let Err(e) = turso_service.mark_error(&recipe_id_str, err_msg).await {
+                if let Err(e) = turso_service.mark_error(&recipe_id_str, &err_msg).await {
                     error!("Failed to record error in Turso: {}", e);
                 }
 
                 let _ = mailer_service
-                    .send_error_alert(&recipe_id_str, &recipe_title, err_msg, max_retries)
+                    .send_error_alert(&recipe_id_str, &recipe_title, &err_msg, max_retries)
                     .await;
 
                 tokio::time::sleep(Duration::from_secs(sleep_between_recipes_secs)).await;
@@ -171,23 +193,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // 5. Update MongoDB
+        // 6. Update MongoDB
         info!(
-            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}, GanttTable = {}. Updating MongoDB...",
+            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}, Difficulty = {:?}, Protein = {:?}g, Carbs = {:?}g, Fat = {:?}g, SatFat = {:?}g, Fiber = {:?}g, Sugar = {:?}g, Sodium = {:?}mg, DietaryTags = {:?}, Allergens = {:?}, GanttTable = {}. Updating MongoDB...",
             recipe_title,
             audit_result.calories,
             audit_result.recipe_cuisine,
             audit_result.recipe_yield,
+            audit_result.difficulty,
+            audit_result.protein,
+            audit_result.carbohydrates,
+            audit_result.fat,
+            audit_result.saturated_fat,
+            audit_result.fiber,
+            audit_result.sugar,
+            audit_result.sodium,
+            audit_result.dietary_tags,
+            audit_result.allergens,
             if audit_result.gantt_table.is_some() { "Present" } else { "None" }
         );
         match mongo_service
-            .update_recipe_seo(
-                &recipe.id,
-                audit_result.calories,
-                audit_result.recipe_cuisine.as_deref(),
-                audit_result.recipe_yield,
-                audit_result.gantt_table.as_ref(),
-            )
+            .update_recipe_seo(&recipe.id, &audit_result)
             .await
         {
             Ok(_) => {
@@ -211,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 6. Sleep between recipes
+        // 7. Sleep between recipes
         info!(
             "Sleeping for {} seconds before the next recipe...",
             sleep_between_recipes_secs

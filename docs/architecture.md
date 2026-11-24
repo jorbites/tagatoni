@@ -7,9 +7,13 @@ This document details the system design, purpose, architectural decisions, and e
 ## 1. Purpose
 
 Tagatoni is a background daemon designed to automatically audit recipes posted in the Jorbites ecosystem. Using AI, it populates missing metadata required for SEO optimization and a better consumer user experience:
-- **Calories**: An estimated count of calories per serving.
+- **Calories**: An estimated count of calories (`kcal`) per serving.
 - **Recipe Cuisine**: Classification of cuisine origin (e.g., Italian, Spanish, Mexican, Mediterranean).
-- **Recipe Yield**: Estimates the yield/servings of the recipe (e.g. "4 servings").
+- **Recipe Yield**: Estimates the yield/servings of the recipe (e.g. `4`).
+- **Difficulty**: Strict 3-tier culinary complexity classification (`Easy`, `Medium`, `Hard`).
+- **Nutritional Information (per serving)**: `protein` (g), `carbohydrates` (g), `fat` (g), `saturatedFat` (g), `fiber` (g), `sugar` (g), and `sodium` (mg).
+- **Dietary & Lifestyle Tags**: Multi-label canonical classification across eating styles (`vegan`, `vegetarian`, `pescatarian`, `mediterranean`, `halal`, `kosher`) and practical cooking tags (`meal-prep`, `budget-friendly`, `one-pot`, `comfort-food`, `kid-friendly`, `spicy`).
+- **Allergens (EU-14)**: Canonical EU-14 allergen detection (`gluten`, `crustaceans`, `eggs`, `fish`, `peanuts`, `soy`, `milk`, `nuts`, `celery`, `mustard`, `sesame`, `sulphites`, `lupin`, `molluscs`), covering both direct and implicit/composite ingredients.
 - **Gantt Table**: A visual cooking-flow matrix organizing ingredients as rows and cooking actions as column spans.
 
 ---
@@ -22,15 +26,16 @@ Tagatoni runs as an always-on background process, interacting with MongoDB, Turs
 
 ```mermaid
 graph TD
-    A[Start Loop] --> B[Fetch recipe from MongoDB where calories/cuisine/yield/ganttTable IS NULL]
-    B -- None found --> C[Sleep 10 minutes] --> A
-    B -- Recipe found --> D{Turso: Needs Processing?}
-    D -- No (Ok/Skipped/Error Cooldown) --> A
-    D -- Yes --> E{MongoDB: Already filled?}
-    E -- Yes --> F[Mark Skipped in Turso] --> A
-    E -- No --> G[Call Gemini Interactions API]
-    G -- Success --> H[Update MongoDB with metadata] --> I[Mark OK in Turso] --> J[Sleep 60s] --> A
-    G -- Failure (All retries) --> K[Mark Error in Turso] --> L[Send SMTP Alert] --> J --> A
+    A[Start Loop] --> B[Turso: Fetch blocked error recipe IDs]
+    B --> C[Fetch recipe from MongoDB where _id NOT IN blocked AND any audited field IS NULL]
+    C -- None found --> D[Sleep 10 minutes] --> A
+    C -- Recipe found --> E{Turso: Needs Processing?}
+    E -- No (Ok/Skipped/Error Cooldown) --> A
+    E -- Yes --> F{MongoDB: Already filled?}
+    F -- Yes --> G[Mark Skipped in Turso] --> A
+    F -- No --> H[Call Gemini Interactions API]
+    H -- Success & Valid --> I[Update MongoDB with metadata] --> J[Mark OK in Turso] --> K[Sleep 60s] --> A
+    H -- Failure (All retries) --> L[Mark Error in Turso] --> M[Send SMTP Alert] --> K --> A
 ```
 
 ---
@@ -39,7 +44,7 @@ graph TD
 
 ### MongoDB (Core Data Store)
 Tagatoni reads recipes directly from Jorbites' primary MongoDB store.
-- **Query**: Searches for recipes where `calories`, `recipeCuisine`, `recipeYield`, or `ganttTable` is missing/null.
+- **Query**: Searches for recipes where any managed field (`calories`, `recipeCuisine`, `recipeYield`, `ganttTable`, `difficulty`, `protein`, `carbohydrates`, `fat`, `saturatedFat`, `fiber`, `sugar`, `sodium`, `dietaryTags`, or `allergens`) is missing/null, while excluding locked `error` IDs via `_id: { $nin: excluded_ids }`.
 - **Update**: Enriches the document using the `$set` operator. Only fields that were missing in the original document are set; existing non-null fields are preserved and never overwritten.
 
 ### Turso (Audit & State Preservation)
@@ -58,31 +63,26 @@ To keep the audit process robust, scalable, and independent of MongoDB query lim
   - `ok`: Recipe successfully audited.
   - `skipped`: Recipe already has all targeted fields filled (avoids double auditing).
   - `error`: Failed to process. A cooldown period must pass before retrying.
+- **Triggering a Partial Re-Audit**: When new fields are added to Tagatoni, reset previously completed records in Turso:
+  ```sql
+  DELETE FROM audited_recipes WHERE status IN ('ok', 'skipped');
+  ```
+  Tagatoni will automatically request only the newly missing fields from Gemini while preserving existing metadata in MongoDB.
 
 ---
 
 ## 4. Gemini 3.5 Flash Interactions API Integration
 
 Tagatoni uses the **Interactions API** (`/v1beta/interactions`) to obtain structured output representing the metadata.
-- **Dynamic Prompt & Partial Field Auditing**: Tagatoni checks which specific fields are missing (`calories`, `recipeCuisine`, `recipeYield`, `ganttTable`) for the recipe and dynamically generates a prompt requesting only those missing fields. Already-fulfilled fields are excluded from the request.
+- **Dynamic Prompt & Partial Field Auditing**: Tagatoni checks which specific fields are missing for the recipe and dynamically generates a prompt requesting only those missing fields. Existing metadata (`minutes`, `method`, `calories`, `recipeYield`) is included as read-only context so newly estimated macros remain mathematically consistent with existing calories and yield.
 - **Thinking Configuration**: The agent specifies `"thinking_level": "minimal"` to match free-tier guidelines.
-- **Output Constraints**: A dynamically constructed JSON schema guarantees that the model returns only the JSON structure for the requested missing fields:
-  ```json
-  {
-    "calories": <integer (optional)>,
-    "recipeCuisine": <string (optional)>,
-    "recipeYield": <integer (optional)>,
-    "ganttTable": <object (optional) { preSteps, rows, columns }>
-  }
-  ```
-- **Cuisine Classification Enum List**: When `recipeCuisine` is missing, to prevent hallucinations, spelling variations, and inconsistent casings (e.g. "mexicano", "TexMex", "mexican cuisine"), the JSON schema enforces a strict string `enum` list in `recipeCuisine`. The allowed values are:
-  - `Spanish`, `Catalan`, `Italian`, `Mexican`, `Japanese`, `Chinese`, `Indian`, `French`, `American`, `Mediterranean`, `Middle Eastern`, `Greek`, `Thai`, `Vietnamese`, `Moroccan`, `Turkish`, `Latin American`, `Caribbean`, `Nordic`, `British`, `German`, `Eastern European`, `African`, `Asian Fusion`, `International`
-- **Robust Parsing**: The Interactions API returns a stateful `steps` timeline. Tagatoni iterates over the output steps to locate the `model_output` step, extracts the generated JSON, and deserializes it directly into the application model.
+- **Output Constraints**: A dynamically constructed JSON schema guarantees that the model returns only the JSON structure for the requested missing fields, enforcing strict enum lists for `recipeCuisine`, `difficulty`, and `dietaryTags`.
+- **Validation & Sanitization**: Before updating MongoDB, Tagatoni verifies that all requested fields are present and valid (non-negative integers for nutrition, positive yield, allowed enums for cuisine/difficulty, deduplicated allowed values for `dietaryTags`).
 
 ---
 
 ## 5. Resilience & Fault Tolerance
 
 - **Exponential Backoff**: If the Gemini API returns a rate limit or HTTP error, the client retries up to 3 times per recipe (5s, 10s backoff intervals).
-- **Error Cooldown & Retries**: When a recipe fails after all backoff retries, it is marked as `error` in Turso. It is locked out from execution for `24` hours to prevent hammering the API. It will be retried up to `3` times before being permanently locked.
+- **Error Cooldown & Retries**: When a recipe fails after all backoff retries, it is marked as `error` in Turso and excluded via `$nin` during its `24`-hour cooldown so it cannot stall remaining recipes. It will be retried up to `3` times before being permanently locked.
 - **SMTP Notification**: When a recipe exhausts all retries, the agent sends an alert email containing the error reason and recipe details, helping administrators troubleshoot issues.
