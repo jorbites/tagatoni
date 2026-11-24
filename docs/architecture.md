@@ -12,7 +12,8 @@ Tagatoni is a background daemon designed to automatically audit recipes posted i
 - **Recipe Yield**: Estimates the yield/servings of the recipe (e.g. `4`).
 - **Difficulty**: Strict 3-tier culinary complexity classification (`Easy`, `Medium`, `Hard`).
 - **Nutritional Information (per serving)**: `protein` (g), `carbohydrates` (g), `fat` (g), `saturatedFat` (g), `fiber` (g), `sugar` (g), and `sodium` (mg).
-- **Dietary Tags**: Multi-label canonical dietary classification (`vegan`, `vegetarian`, `gluten-free`, `dairy-free`, `nut-free`, `egg-free`, `soy-free`, `sugar-free`, `low-carb`, `high-protein`, `low-fat`, `keto`, `paleo`).
+- **Dietary & Lifestyle Tags**: Multi-label canonical classification across eating styles (`vegan`, `vegetarian`, `pescatarian`, `mediterranean`, `halal`, `kosher`) and practical cooking tags (`meal-prep`, `budget-friendly`, `one-pot`, `comfort-food`, `kid-friendly`, `spicy`).
+- **Allergens (EU-14)**: Canonical EU-14 allergen detection (`gluten`, `crustaceans`, `eggs`, `fish`, `peanuts`, `soy`, `milk`, `nuts`, `celery`, `mustard`, `sesame`, `sulphites`, `lupin`, `molluscs`), covering both direct and implicit/composite ingredients.
 - **Gantt Table**: A visual cooking-flow matrix organizing ingredients as rows and cooking actions as column spans.
 
 ---
@@ -43,7 +44,7 @@ graph TD
 
 ### MongoDB (Core Data Store)
 Tagatoni reads recipes directly from Jorbites' primary MongoDB store.
-- **Query**: Searches for recipes where any managed field (`calories`, `recipeCuisine`, `recipeYield`, `ganttTable`, `difficulty`, `protein`, `carbohydrates`, `fat`, `saturatedFat`, `fiber`, `sugar`, `sodium`, or `dietaryTags`) is missing/null, while excluding locked `error` IDs via `_id: { $nin: excluded_ids }`.
+- **Query**: Searches for recipes where any managed field (`calories`, `recipeCuisine`, `recipeYield`, `ganttTable`, `difficulty`, `protein`, `carbohydrates`, `fat`, `saturatedFat`, `fiber`, `sugar`, `sodium`, `dietaryTags`, or `allergens`) is missing/null, while excluding locked `error` IDs via `_id: { $nin: excluded_ids }`.
 - **Update**: Enriches the document using the `$set` operator. Only fields that were missing in the original document are set; existing non-null fields are preserved and never overwritten.
 
 ### Turso (Audit & State Preservation)

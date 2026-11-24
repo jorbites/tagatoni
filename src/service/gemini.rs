@@ -9,17 +9,33 @@ pub const ALLOWED_DIFFICULTIES: &[&str] = &["Easy", "Medium", "Hard"];
 pub const ALLOWED_DIETARY_TAGS: &[&str] = &[
     "vegan",
     "vegetarian",
-    "gluten-free",
-    "dairy-free",
-    "nut-free",
-    "egg-free",
-    "soy-free",
-    "sugar-free",
-    "low-carb",
-    "high-protein",
-    "low-fat",
-    "keto",
-    "paleo",
+    "pescatarian",
+    "mediterranean",
+    "halal",
+    "kosher",
+    "meal-prep",
+    "budget-friendly",
+    "one-pot",
+    "comfort-food",
+    "kid-friendly",
+    "spicy",
+];
+
+pub const ALLOWED_ALLERGENS: &[&str] = &[
+    "gluten",
+    "crustaceans",
+    "eggs",
+    "fish",
+    "peanuts",
+    "soy",
+    "milk",
+    "nuts",
+    "celery",
+    "mustard",
+    "sesame",
+    "sulphites",
+    "lupin",
+    "molluscs",
 ];
 
 pub const ALLOWED_CUISINES: &[&str] = &[
@@ -111,6 +127,7 @@ pub struct AuditResult {
     pub sodium: Option<i32>,
     #[serde(rename = "dietaryTags")]
     pub dietary_tags: Option<Vec<String>>,
+    pub allergens: Option<Vec<String>>,
 }
 
 pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
@@ -127,6 +144,7 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
     let need_sugar = recipe.sugar.is_none();
     let need_sodium = recipe.sodium.is_none();
     let need_dietary_tags = recipe.needs_dietary_tags();
+    let need_allergens = recipe.needs_allergens();
 
     let mut request_items = Vec::new();
 
@@ -217,20 +235,40 @@ pub fn build_prompt_and_schema(recipe: &Recipe) -> (String, Value) {
 
     if need_dietary_tags {
         request_items.push(format!(
-            "{}. Dietary tags (array of applicable canonical tags from the allowed enum list; return [] if none apply). Apply strictly based on the recipe's ingredients and per-serving nutrition:
+            "{}. Dietary & lifestyle tags (array of applicable canonical tags from the allowed enum list; return [] if none apply). Apply accurately based on ingredients, cuisine, and cooking style:
 - \"vegan\": no animal products at all (no meat, fish, dairy, eggs, honey).
 - \"vegetarian\": no meat, poultry, fish, or seafood.
-- \"gluten-free\": no wheat, barley, rye, regular oats, bread, regular pasta, or gluten-containing soy sauce.
-- \"dairy-free\": no milk, butter, cream, cheese, yogurt, ghee, or dairy derivatives.
-- \"nut-free\": no tree nuts or peanuts.
-- \"egg-free\": no eggs, yolks, whites, or egg-based mayo.
-- \"soy-free\": no soy, tofu, tempeh, edamame, soy sauce, or tamari.
-- \"sugar-free\": <= 1g sugar per serving and no added sugar/honey/syrup.
-- \"low-carb\": <= 20g net carbs (carbohydrates minus fiber) per serving.
-- \"high-protein\": >= 20g protein per serving (or >= 25% of calories from protein).
-- \"low-fat\": <= 5g total fat per serving.
-- \"keto\": <= 10g net carbs per serving with high fat and no grains/starches/sugar.
-- \"paleo\": whole unprocessed foods only; no grains, legumes, dairy, refined sugar, or seed oils.",
+- \"pescatarian\": no land meat or poultry, includes fish/seafood.
+- \"mediterranean\": aligns with traditional Mediterranean diet (olive oil, vegetables, legumes, whole grains, fish/herbs).
+- \"halal\": no pork, bacon, ham, lard, gelatin, or alcohol (wine/beer/liquor).
+- \"kosher\": no pork, no shellfish/crustaceans/molluscs, and no mixing meat with dairy.
+- \"meal-prep\": stores, reheats, or batches well for advance weekday meals.
+- \"budget-friendly\": made primarily from inexpensive, everyday staple ingredients.
+- \"one-pot\": cooked entirely in a single pot, pan, sheet tray, or air fryer basket.
+- \"comfort-food\": hearty, cozy, indulgent, or nostalgic homestyle dish.
+- \"kid-friendly\": mild flavors and approachable textures that appeal to children.
+- \"spicy\": contains noticeable chili/pepper heat (cayenne, jalapeño, chili flakes, curry paste, tabasco, etc.).",
+            request_items.len() + 1
+        ));
+    }
+
+    if need_allergens {
+        request_items.push(format!(
+            "{}. Allergens (array of EU-14 allergen IDs present in the recipe from the allowed enum list; return [] if none are present). Detect BOTH direct and implicit/composite ingredients (e.g., pesto -> nuts & milk, bechamel -> gluten & milk, mayonnaise -> eggs, soy sauce -> soy & gluten, Worcestershire sauce -> fish, wine/vinegar -> sulphites). Allowed EU-14 values:
+- \"gluten\": wheat, barley, rye, regular oats, spelt, bread, pasta, couscous, regular flour, beer, regular soy sauce (ignore if explicitly gluten-free).
+- \"crustaceans\": shrimp, prawns, crab, lobster, crayfish, langoustine.
+- \"eggs\": eggs, yolks, whites, meringue, mayonnaise, aioli with egg.
+- \"fish\": any fish, anchovies, fish sauce, Worcestershire sauce, surimi.
+- \"peanuts\": peanuts, peanut butter, peanut oil.
+- \"soy\": soy, tofu, tempeh, edamame, miso, soy sauce, tamari, soy milk.
+- \"milk\": dairy milk, butter, cream, cheese, yogurt, ghee, whey, condensed milk (ignore plant-based milks/vegan cheeses).
+- \"nuts\": tree nuts (almonds, hazelnuts, walnuts, cashews, pecans, pistachios, macadamia, pine nuts, chestnuts, marzipan, praline; NOT coconut or nutmeg).
+- \"celery\": celery stalks, leaves, seeds, celeriac.
+- \"mustard\": mustard seeds, mustard paste, Dijon.
+- \"sesame\": sesame seeds, tahini, sesame oil, gomasio, halva.
+- \"sulphites\": wine, cava, champagne, vinegar, sherry, vermouth, cider, dried apricots.
+- \"lupin\": lupin beans or lupin flour.
+- \"molluscs\": clams, mussels, oysters, squid, octopus, cuttlefish, scallops, cockles, snails.",
             request_items.len() + 1
         ));
     }
@@ -401,6 +439,18 @@ Return object structure:
         required.push("dietaryTags");
     }
 
+    if need_allergens {
+        properties["allergens"] = json!({
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ALLOWED_ALLERGENS
+            }
+        });
+        property_ordering.push("allergens");
+        required.push("allergens");
+    }
+
     if need_gantt {
         properties["ganttTable"] = json!({
             "type": "object",
@@ -496,6 +546,9 @@ pub fn validate_and_sanitize_result(
     if recipe.needs_dietary_tags() && result.dietary_tags.is_none() {
         return Err("Missing required field in Gemini output: dietaryTags".to_string());
     }
+    if recipe.needs_allergens() && result.allergens.is_none() {
+        return Err("Missing required field in Gemini output: allergens".to_string());
+    }
     if recipe.gantt_table.is_none() && result.gantt_table.is_none() {
         return Err("Missing required field in Gemini output: ganttTable".to_string());
     }
@@ -543,6 +596,16 @@ pub fn validate_and_sanitize_result(
             .filter(|tag| seen.insert(tag.clone()))
             .collect();
         result.dietary_tags = Some(sanitized);
+    }
+
+    if let Some(allergens) = result.allergens.take() {
+        let mut seen = HashSet::new();
+        let sanitized: Vec<String> = allergens
+            .into_iter()
+            .filter(|a| ALLOWED_ALLERGENS.contains(&a.as_str()))
+            .filter(|a| seen.insert(a.clone()))
+            .collect();
+        result.allergens = Some(sanitized);
     }
 
     Ok(result)
@@ -668,7 +731,8 @@ mod tests {
             fiber: Some(3),
             sugar: Some(2),
             sodium: Some(750),
-            dietary_tags: Some(vec!["gluten-free".to_string()]),
+            dietary_tags: Some(vec!["mediterranean".to_string()]),
+            allergens: Some(vec!["crustaceans".to_string()]),
         }
     }
 
@@ -730,7 +794,8 @@ mod tests {
             "fiber": 6,
             "sugar": 4,
             "sodium": 480,
-            "dietaryTags": ["gluten-free", "high-protein"]
+            "dietaryTags": ["mediterranean", "one-pot"],
+            "allergens": ["gluten", "milk"]
         }"#;
         let result: AuditResult = serde_json::from_str(raw_json).unwrap();
         assert_eq!(result.difficulty, Some("Easy".to_string()));
@@ -743,7 +808,11 @@ mod tests {
         assert_eq!(result.sodium, Some(480));
         assert_eq!(
             result.dietary_tags,
-            Some(vec!["gluten-free".to_string(), "high-protein".to_string()])
+            Some(vec!["mediterranean".to_string(), "one-pot".to_string()])
+        );
+        assert_eq!(
+            result.allergens,
+            Some(vec!["gluten".to_string(), "milk".to_string()])
         );
         assert_eq!(result.calories, None);
         assert_eq!(result.gantt_table, None);
@@ -792,6 +861,7 @@ mod tests {
             sugar: None,
             sodium: None,
             dietary_tags: None,
+            allergens: None,
         };
 
         let (prompt, schema) = build_prompt_and_schema(&recipe);
@@ -808,9 +878,9 @@ mod tests {
         assert!(schema["properties"].get("recipeYield").is_none());
         assert!(schema["properties"].get("ganttTable").is_none());
 
-        // Should request all 9 new fields
+        // Should request all 10 new fields
         let req_array = schema["required"].as_array().unwrap();
-        assert_eq!(req_array.len(), 9);
+        assert_eq!(req_array.len(), 10);
         for key in [
             "difficulty",
             "protein",
@@ -821,6 +891,7 @@ mod tests {
             "sugar",
             "sodium",
             "dietaryTags",
+            "allergens",
         ] {
             assert!(
                 schema["properties"].get(key).is_some(),
@@ -854,11 +925,12 @@ mod tests {
             sugar: None,
             sodium: None,
             dietary_tags: Some(vec![]), // simulates Prisma default on newly created recipe
+            allergens: Some(vec![]),    // simulates Prisma default on newly created recipe
         };
 
         let (_prompt, schema) = build_prompt_and_schema(&recipe);
         let req_array = schema["required"].as_array().unwrap();
-        assert_eq!(req_array.len(), 13);
+        assert_eq!(req_array.len(), 14);
     }
 
     #[test]
@@ -866,14 +938,21 @@ mod tests {
         let mut recipe = make_full_recipe();
         recipe.difficulty = None;
         recipe.dietary_tags = None;
+        recipe.allergens = None;
 
         let raw = AuditResult {
             difficulty: Some("Easy".to_string()),
             dietary_tags: Some(vec![
                 "vegan".to_string(),
-                "gluten-free".to_string(),
+                "one-pot".to_string(),
                 "vegan".to_string(),
                 "invented-tag".to_string(),
+            ]),
+            allergens: Some(vec![
+                "gluten".to_string(),
+                "soy".to_string(),
+                "gluten".to_string(),
+                "not-an-allergen".to_string(),
             ]),
             ..Default::default()
         };
@@ -882,7 +961,11 @@ mod tests {
         assert_eq!(validated.difficulty, Some("Easy".to_string()));
         assert_eq!(
             validated.dietary_tags,
-            Some(vec!["vegan".to_string(), "gluten-free".to_string()])
+            Some(vec!["vegan".to_string(), "one-pot".to_string()])
+        );
+        assert_eq!(
+            validated.allergens,
+            Some(vec!["gluten".to_string(), "soy".to_string()])
         );
     }
 

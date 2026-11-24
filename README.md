@@ -1,6 +1,6 @@
 # Tagatoni 🏷️
 
-Tagatoni is a robust, always-running autonomous agent in the Jorbites ecosystem designed to audit and enrich posted recipes by adding missing fields (`calories`, `recipeCuisine`, `recipeYield`, `difficulty`, nutritional macros/micronutrients, `dietaryTags`, and `ganttTable`) for SEO and user experience.
+Tagatoni is a robust, always-running autonomous agent in the Jorbites ecosystem designed to audit and enrich posted recipes by adding missing fields (`calories`, `recipeCuisine`, `recipeYield`, `difficulty`, nutritional macros/micronutrients, `dietaryTags`, `allergens`, and `ganttTable`) for SEO and user experience.
 
 <p align="center">
   <img src="./docs/assets/tagatoni.png" alt="Tagatoni Logo" width="240" />

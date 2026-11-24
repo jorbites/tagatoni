@@ -195,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 6. Update MongoDB
         info!(
-            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}, Difficulty = {:?}, Protein = {:?}g, Carbs = {:?}g, Fat = {:?}g, SatFat = {:?}g, Fiber = {:?}g, Sugar = {:?}g, Sodium = {:?}mg, DietaryTags = {:?}, GanttTable = {}. Updating MongoDB...",
+            "Audit successful for recipe {}: Calories = {:?}, Cuisine = {:?}, Yield = {:?}, Difficulty = {:?}, Protein = {:?}g, Carbs = {:?}g, Fat = {:?}g, SatFat = {:?}g, Fiber = {:?}g, Sugar = {:?}g, Sodium = {:?}mg, DietaryTags = {:?}, Allergens = {:?}, GanttTable = {}. Updating MongoDB...",
             recipe_title,
             audit_result.calories,
             audit_result.recipe_cuisine,
@@ -209,6 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             audit_result.sugar,
             audit_result.sodium,
             audit_result.dietary_tags,
+            audit_result.allergens,
             if audit_result.gantt_table.is_some() { "Present" } else { "None" }
         );
         match mongo_service

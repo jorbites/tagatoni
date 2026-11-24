@@ -35,6 +35,7 @@ pub struct Recipe {
     pub sodium: Option<i32>,
     #[serde(rename = "dietaryTags")]
     pub dietary_tags: Option<Vec<String>>,
+    pub allergens: Option<Vec<String>>,
 }
 
 impl Recipe {
@@ -48,6 +49,12 @@ impl Recipe {
         self.dietary_tags.is_none()
             || (self.dietary_tags.as_ref().is_some_and(|t| t.is_empty())
                 && self.difficulty.is_none())
+    }
+
+    /// Returns true if EU-14 allergens have not yet been audited.
+    pub fn needs_allergens(&self) -> bool {
+        self.allergens.is_none()
+            || (self.allergens.as_ref().is_some_and(|a| a.is_empty()) && self.difficulty.is_none())
     }
 
     /// Returns true if every Tagatoni-managed field is already populated.
@@ -65,6 +72,7 @@ impl Recipe {
             && self.sugar.is_some()
             && self.sodium.is_some()
             && !self.needs_dietary_tags()
+            && !self.needs_allergens()
     }
 }
 
@@ -95,7 +103,8 @@ mod tests {
             "fiber": 3,
             "sugar": 2,
             "sodium": 820,
-            "dietaryTags": ["high-protein"]
+            "dietaryTags": ["comfort-food"],
+            "allergens": ["gluten", "eggs", "milk"]
         });
 
         let recipe: Recipe = serde_json::from_value(recipe_json).unwrap();
@@ -117,8 +126,17 @@ mod tests {
         assert_eq!(recipe.fiber, Some(3));
         assert_eq!(recipe.sugar, Some(2));
         assert_eq!(recipe.sodium, Some(820));
-        assert_eq!(recipe.dietary_tags, Some(vec!["high-protein".to_string()]));
+        assert_eq!(recipe.dietary_tags, Some(vec!["comfort-food".to_string()]));
+        assert_eq!(
+            recipe.allergens,
+            Some(vec![
+                "gluten".to_string(),
+                "eggs".to_string(),
+                "milk".to_string()
+            ])
+        );
         assert!(!recipe.needs_dietary_tags());
+        assert!(!recipe.needs_allergens());
         assert!(!recipe.is_fully_audited()); // missing ganttTable
     }
 
@@ -150,7 +168,9 @@ mod tests {
         assert_eq!(recipe.sugar, None);
         assert_eq!(recipe.sodium, None);
         assert_eq!(recipe.dietary_tags, None);
+        assert_eq!(recipe.allergens, None);
         assert!(recipe.needs_dietary_tags());
+        assert!(recipe.needs_allergens());
         assert!(!recipe.is_fully_audited());
     }
 
@@ -164,17 +184,19 @@ mod tests {
             "ingredients": ["Flour"],
             "steps": ["Mix"],
             "difficulty": null,
-            "dietaryTags": []
+            "dietaryTags": [],
+            "allergens": []
         });
         let unaudited: Recipe = serde_json::from_value(unaudited_prisma_json).unwrap();
         assert!(unaudited.needs_dietary_tags());
+        assert!(unaudited.needs_allergens());
 
         let audited_empty_json = json!({
             "_id": { "$oid": "507f1f77bcf86cd799439011" },
             "title": "Audited Recipe",
-            "description": "No dietary tags apply",
+            "description": "No dietary tags or allergens apply",
             "categories": [],
-            "ingredients": ["Flour", "Pork", "Butter"],
+            "ingredients": ["Rice", "Olive oil", "Salt"],
             "steps": ["Cook"],
             "calories": 500,
             "recipeCuisine": "Spanish",
@@ -188,10 +210,12 @@ mod tests {
             "fiber": 2,
             "sugar": 3,
             "sodium": 600,
-            "dietaryTags": []
+            "dietaryTags": [],
+            "allergens": []
         });
         let audited: Recipe = serde_json::from_value(audited_empty_json).unwrap();
         assert!(!audited.needs_dietary_tags());
+        assert!(!audited.needs_allergens());
         assert!(audited.is_fully_audited());
     }
 

@@ -52,6 +52,9 @@ pub fn build_set_document(result: &AuditResult) -> Result<mongodb::bson::Documen
     if let Some(ref dietary_tags) = result.dietary_tags {
         set_doc.insert("dietaryTags", dietary_tags);
     }
+    if let Some(ref allergens) = result.allergens {
+        set_doc.insert("allergens", allergens);
+    }
     Ok(set_doc)
 }
 
@@ -83,7 +86,9 @@ pub fn build_missing_fields_filter(excluded_ids: &[ObjectId]) -> mongodb::bson::
             { "sodium": { "$exists": false } },
             { "sodium": null },
             { "dietaryTags": { "$exists": false } },
-            { "dietaryTags": null }
+            { "dietaryTags": null },
+            { "allergens": { "$exists": false } },
+            { "allergens": null }
         ]
     };
 
@@ -161,7 +166,8 @@ mod tests {
             fiber: Some(4),
             sugar: Some(3),
             sodium: Some(650),
-            dietary_tags: Some(vec!["vegetarian".to_string(), "high-protein".to_string()]),
+            dietary_tags: Some(vec!["vegetarian".to_string(), "comfort-food".to_string()]),
+            allergens: Some(vec!["gluten".to_string(), "milk".to_string()]),
         };
 
         let doc = build_set_document(&result).unwrap();
@@ -178,7 +184,8 @@ mod tests {
         assert_eq!(doc.get_i32("sugar").unwrap(), 3);
         assert_eq!(doc.get_i32("sodium").unwrap(), 650);
         assert_eq!(doc.get_array("dietaryTags").unwrap().len(), 2);
-        assert_eq!(doc.len(), 13);
+        assert_eq!(doc.get_array("allergens").unwrap().len(), 2);
+        assert_eq!(doc.len(), 14);
     }
 
     #[test]
@@ -193,6 +200,7 @@ mod tests {
             sugar: Some(0),
             sodium: Some(320),
             dietary_tags: Some(vec![]),
+            allergens: Some(vec![]),
             ..Default::default()
         };
 
@@ -205,7 +213,8 @@ mod tests {
         assert_eq!(doc.get_i32("fiber").unwrap(), 0);
         assert_eq!(doc.get_i32("sugar").unwrap(), 0);
         assert!(doc.get_array("dietaryTags").unwrap().is_empty());
-        assert_eq!(doc.len(), 9);
+        assert!(doc.get_array("allergens").unwrap().is_empty());
+        assert_eq!(doc.len(), 10);
     }
 
     #[test]
@@ -218,7 +227,7 @@ mod tests {
     fn test_build_missing_fields_filter_with_and_without_exclusions() {
         let filter_no_exclusions = build_missing_fields_filter(&[]);
         assert!(filter_no_exclusions.get("_id").is_none());
-        assert!(filter_no_exclusions.get_array("$or").unwrap().len() >= 26);
+        assert!(filter_no_exclusions.get_array("$or").unwrap().len() >= 28);
 
         let oid = ObjectId::new();
         let filter_with_exclusions = build_missing_fields_filter(&[oid]);
